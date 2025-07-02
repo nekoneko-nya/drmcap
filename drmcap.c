@@ -56,7 +56,7 @@ int iRCounter = 0;
 // This is only for some old libdrm library which doesn't support GetFB2 call.
 // If the libdrm already contains this, remove the following definition
 // ----------------------------------------------------------------------------------
-#ifndef drmModeGetFB2
+#if 0   //如果 libdrm 中已定义函数 drmModeGetFB2()，这里应屏蔽掉
 typedef struct _drmModeFB2 {
 	uint32_t fb_id;
 	uint32_t width, height;
@@ -172,8 +172,11 @@ int dump_plane_rgb(uint32_t fd, drmModePlane * ovr)
         return errno;
     }
 
-	printf("-> Plane/FB: %d/%d, [%d x %d], PITCH:%d, BPP:%d, DEPTH:%d, DETILE:%s\n",
-				ovr->plane_id, fb->fb_id, fb->width, fb->height, fb->pitch, fb->bpp, fb->depth,(iFlag & FLAG_TILE)?"Y":"N");
+    printf("-> Plane/FB: %d/%d, [%d x %d], PITCH:%d, BPP:%d, DEPTH:%d, DETILE:%s\n",
+                ovr->plane_id, fb->fb_id,
+                fb->width, fb->height,
+                fb->pitch, fb->bpp, fb->depth,
+                (iFlag & FLAG_TILE)?"Y":"N");
 
     // Map the framebuffer
     map.handle = fb->handle;
@@ -200,7 +203,7 @@ int dump_plane_rgb(uint32_t fd, drmModePlane * ovr)
         /*
         // Do de-tile
         void *tmp = NULL;
-        int size = fb->width * fb->height * fb->bpp / 8;
+        int size = fb->pitch/(fb->bpp/8) * fb->height * fb->bpp / 8;
 
         tmp = (uint8_t *) malloc(size*8);
         if (!tmp) {
@@ -210,14 +213,20 @@ int dump_plane_rgb(uint32_t fd, drmModePlane * ovr)
 
         tmp = detile((const void * )buf, NULL, fb->width, fb->height, 4, SUPERTILED, FASTMSAA_SUPERTILE);
 
-        sprintf(sFile_name, "%s/P%d_%dx%d-%d-detile_%04d_FB%d.rgb",sOutput_folder, ovr->plane_id, fb->width, fb->height, fb->bpp, iRCounter+1, ovr->fb_id);
+        sprintf(sFile_name, "%s/P%d_%dx%d-%d-detile_%04d_FB%d.rgb",sOutput_folder, ovr->plane_id, fb->pitch/(fb->bpp/8), fb->height, fb->bpp, iRCounter+1, ovr->fb_id);
         printf("-> Output: %s (%d)\n", sFile_name, size);
         dump_buf_file((uint8_t *)tmp, size, sFile_name);
 
         free(tmp);
         //*/
     } else {
-        sprintf(sFile_name, "%s/P%d_%dx%d-%d_%04d_FB%d.rgb", sOutput_folder, ovr->plane_id, fb->width, fb->height, fb->bpp, iRCounter+1, ovr->fb_id);
+        /**
+         * Hardware usually requires each line of image data in memory to be aligned to a specific number of bytes (e.g., 4 bytes, 16 bytes, 64 bytes, or more).
+         * So cannot use fb->width as the width directly, there will be extra bytes 0x00 at the end of each line.
+         * Use (fb->pitch/(fb->bpp/8)) as width.
+         * TODO: remove extra bytes when dump buf
+         */
+        sprintf(sFile_name, "%s/P%d_%dx%d-%dbit_%04d_FB%d.rgb", sOutput_folder, ovr->plane_id, fb->pitch/(fb->bpp/8), fb->height, fb->bpp, iRCounter+1, ovr->fb_id);
         printf("-> Output: %s (%d)\n", sFile_name, imgsize);
         dump_buf_file(buf, imgsize , sFile_name);
     }
@@ -267,8 +276,11 @@ int dump_plane_yuv(uint32_t fd, drmModePlane * ovr)
     }
 
     printf("-> Plane/FB: %d/%d, [%d x %d], %s: %s YUV/%s, %dBPP, FMT:%s, MOD:0x%x, DETILE:%s\n",
-            ovr->plane_id, ovr->fb_id, fb2->width, fb2->height, sBuffer, bPacked ? "Packed":"Planar", iBpp==12 ? "420" : "422", 
-            iBpp, sBuffer, fb2->modifier, (iFlag & FLAG_TILE)?"Y":"N");
+            ovr->plane_id, ovr->fb_id,
+            fb2->width, fb2->height,
+            sBuffer, (bPacked ? "Packed":"Planar"), (iBpp==12 ? "420" : "422"),
+            iBpp, sBuffer, fb2->modifier,
+            (iFlag & FLAG_TILE)?"Y":"N");
 
     // We calculate the total imgsize barely from the pitch. If it's packed mode, pitches[1] will be 0
 	imgsize = fb2->pitches[0] * fb2->height + fb2->pitches[1] * fb2->height / 2;
@@ -332,12 +344,18 @@ int dump_plane_yuv(uint32_t fd, drmModePlane * ovr)
         NV12Tile2linear(fb2->width, fb2->height,  0, 0, fb2->pitches[0], nBaseAddr, pDst_buf);
 
         // Save YUV file
-        sprintf(sBuffer, "%s/P%d_%dx%d-%d-detile_%04d_FB%d.yuv",sOutput_folder, ovr->plane_id, fb2->width, fb2->height, iBpp, iRCounter+1, ovr->fb_id);
+        sprintf(sBuffer, "%s/P%d_%dx%d-%dbit-detile_%04d_FB%d.yuv",sOutput_folder, ovr->plane_id, fb2->width, fb2->height, iBpp, iRCounter+1, ovr->fb_id);
         printf("-> Output: %s (%d)\n", sBuffer, (fb2->width * fb2->height * iBpp) /8);
     	dump_buf_file(pDst_buf, (fb2->width * fb2->height * iBpp) /8 , sBuffer);
         //*/
     } else {
-        sprintf(sBuffer, "%s/P%d_%dx%d-%d_%04d_FB%d.yuv",sOutput_folder, ovr->plane_id, fb2->width, fb2->height, iBpp, iRCounter+1, ovr->fb_id);
+        /**
+         * Hardware usually requires each line of image data in memory to be aligned to a specific number of bytes (e.g., 4 bytes, 16 bytes, 64 bytes, or more).
+         * So cannot use fb->width as the width directly, there will be extra bytes 0x00 at the end of each line.
+         * Use (fb->pitch/(fb->bpp/8)) as width.
+         * TODO: remove extra bytes when dump buf
+         */
+        sprintf(sBuffer, "%s/P%d_%dx%d-%dbit_%04d_FB%d.yuv",sOutput_folder, ovr->plane_id, fb2->width, fb2->height, iBpp, iRCounter+1, ovr->fb_id);
         printf("-> Output: %s (%d)\n", sBuffer, imgsize);
     	dump_buf_file(pSrc_buf, imgsize, sBuffer);
     }
@@ -355,6 +373,7 @@ int dump_plane(uint32_t fd, drmModePlane * ovr)
 {
     drmModeFBPtr fb;
     fb = drmModeGetFB(fd, ovr->fb_id);
+
     if(fb && fb->depth > 0)
         return dump_plane_rgb(fd, ovr);
 	else
